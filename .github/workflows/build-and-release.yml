@@ -1,0 +1,89 @@
+name: Build and release chat2me-motion
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: chat2me-motion-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ros:humble-ros-base-jammy
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential cmake ros-humble-ament-cmake
+      - name: Build
+        run: |
+          . /opt/ros/humble/setup.sh
+          version="$(date -u -d "$(git log -1 --format=%cI "$GITHUB_SHA")" +%Y%m%d)"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHAT2ME_MOTION_VERSION="$version"
+          cmake --build build --parallel
+          mkdir -p dist
+          cp build/chat2me-motion dist/chat2me-motion-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chat2me-motion-${{ matrix.arch }}
+          path: dist/chat2me-motion-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: chat2me-motion-*
+          merge-multiple: true
+          path: dist
+      - name: Compute release version
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(date -u -d "$(git log -1 --format=%cI "$GITHUB_SHA")" +%Y%m%d)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          (cd dist && sha256sum chat2me-motion-linux-* > SHA256SUMS)
+      - name: Move date tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ref="refs/tags/$VERSION"
+          if gh api --silent "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$ref" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release delete "$VERSION" --yes
+          fi
+          gh release create "$VERSION" dist/chat2me-motion-linux-amd64 dist/chat2me-motion-linux-arm64 dist/SHA256SUMS --target "$GITHUB_SHA" --title "chat2me-motion $VERSION" --notes "Prebuilt Linux AMD64 and ARM64 binaries."

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>chat2me_motion</name>
+  <version>2026.10.22</version>
+  <description>Robot physical motion controller providing UDS HTTP actions with strict neck constraints for Chat2Me.</description>
+  <maintainer email="canghai0823@users.noreply.github.com">canghai0823</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

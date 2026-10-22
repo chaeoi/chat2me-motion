@@ -1,0 +1,20 @@
+# General motion daemon configuration
+server:
+  socket_path: "/opt/chat2me/motion/motion.sock"
+
+ros:
+  domain_id: 0
+  localhost_only: false
+  joint_state_topic: "motor/q2w_upper_motor_joint_state"
+  pt_control_topic: "motor/tt_upper_motor_pt_control_data"
+  control_hz: 50
+
+neck:
+  # Strict yaw limit: ±70 degrees = ±1.2217 rad
+  yaw_limit_deg: 70.0
+  pitch_min_deg: -25.0
+  pitch_max_deg: 25.0
+  roll_min_deg: -20.0
+  roll_max_deg: 20.0
+  kp: 200.0
+  kd: 5.0
