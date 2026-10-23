@@ -33,39 +33,59 @@ set(CMAKE_BUILD_RPATH "/opt/ros/humble/lib;/opt/ros/humble/lib/aarch64-linux-gnu
 set(CMAKE_INSTALL_RPATH "/opt/ros/humble/lib;/opt/ros/humble/lib/aarch64-linux-gnu;/opt/ros/humble/lib/x86_64-linux-gnu")
 set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
 
-find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
+option(CHAT2ME_MOTION_WITH_ROS "Build the ROS 2 runtime" ON)
+find_package(yaml-cpp REQUIRED)
+find_package(Threads REQUIRED)
+include(CTest)
 
 add_library(chat2me_motion_core STATIC
   src/config.cpp
-  src/motion_controller.cpp
+  src/motion_engine.cpp
+  src/protocol.cpp
   src/uds_server.cpp
   src/service.cpp
 )
 
 target_include_directories(chat2me_motion_core PUBLIC include)
+target_include_directories(chat2me_motion_core SYSTEM PUBLIC third_party)
+target_link_libraries(chat2me_motion_core PUBLIC yaml-cpp Threads::Threads)
 target_compile_options(chat2me_motion_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
-ament_target_dependencies(chat2me_motion_core rclcpp sensor_msgs std_msgs)
 
-add_executable(chat2me-motion
-  src/main.cpp
-)
+if(BUILD_TESTING)
+  add_executable(motion_offline_test tests/offline_test.cpp)
+  target_link_libraries(motion_offline_test PRIVATE chat2me_motion_core)
+  target_compile_options(motion_offline_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME motion_offline COMMAND motion_offline_test)
+  add_executable(motion_offline_server tests/offline_server.cpp)
+  target_link_libraries(motion_offline_server PRIVATE chat2me_motion_core)
+  target_compile_options(motion_offline_server PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
-set_target_properties(chat2me-motion PROPERTIES
-  BUILD_RPATH "/opt/ros/humble/lib;/opt/ros/humble/lib/aarch64-linux-gnu;/opt/ros/humble/lib/x86_64-linux-gnu"
-  INSTALL_RPATH "/opt/ros/humble/lib;/opt/ros/humble/lib/aarch64-linux-gnu;/opt/ros/humble/lib/x86_64-linux-gnu")
+if(CHAT2ME_MOTION_WITH_ROS)
+  find_package(ament_cmake REQUIRED)
+  find_package(rclcpp REQUIRED)
+  find_package(sensor_msgs REQUIRED)
 
-target_include_directories(chat2me-motion PRIVATE include)
-target_link_libraries(chat2me-motion chat2me_motion_core)
-ament_target_dependencies(chat2me-motion rclcpp sensor_msgs std_msgs)
-target_link_options(chat2me-motion PRIVATE -Wl,--disable-new-dtags)
-target_compile_definitions(chat2me-motion PRIVATE
-  CHAT2ME_MOTION_VERSION="${CHAT2ME_MOTION_VERSION}")
-target_compile_options(chat2me-motion PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_executable(chat2me-motion
+    src/main.cpp
+    src/motion_controller.cpp
+  )
 
-install(TARGETS chat2me-motion RUNTIME DESTINATION lib/${PROJECT_NAME})
-install(FILES config/config.example.yml DESTINATION share/${PROJECT_NAME})
+  set_target_properties(chat2me-motion PROPERTIES
+    BUILD_RPATH "/opt/ros/humble/lib;/opt/ros/humble/lib/aarch64-linux-gnu;/opt/ros/humble/lib/x86_64-linux-gnu"
+    INSTALL_RPATH "/opt/ros/humble/lib;/opt/ros/humble/lib/aarch64-linux-gnu;/opt/ros/humble/lib/x86_64-linux-gnu")
 
-ament_package()
+  target_include_directories(chat2me-motion PRIVATE include)
+  target_link_libraries(chat2me-motion chat2me_motion_core)
+  ament_target_dependencies(chat2me-motion rclcpp sensor_msgs)
+  target_link_options(chat2me-motion PRIVATE -Wl,--disable-new-dtags)
+  target_compile_definitions(chat2me-motion PRIVATE
+    CHAT2ME_MOTION_VERSION="${CHAT2ME_MOTION_VERSION}")
+  target_compile_options(chat2me-motion PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+  install(TARGETS chat2me-motion RUNTIME DESTINATION lib/${PROJECT_NAME})
+  install(FILES config/config.example.yml DESTINATION share/${PROJECT_NAME})
+  install(FILES third_party/NOTICE DESTINATION share/${PROJECT_NAME}/licenses)
+
+  ament_package()
+endif()

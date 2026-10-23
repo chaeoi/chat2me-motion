@@ -1,20 +1,23 @@
-# General motion daemon configuration
 server:
-  socket_path: "/opt/chat2me/motion/motion.sock"
+  socket_path: /opt/chat2me/motion/motion.sock
 
 ros:
   domain_id: 0
   localhost_only: false
-  joint_state_topic: "motor/q2w_upper_motor_joint_state"
-  pt_control_topic: "motor/tt_upper_motor_pt_control_data"
+  joint_state_topic: /motor/q2w_upper_motor_joint_state
+  joint_command_topic: /throw/arm_joint_command
   control_hz: 50
+  feedback_timeout_seconds: 0.5
 
-neck:
-  # Strict yaw limit: ±70 degrees = ±1.2217 rad
-  yaw_limit_deg: 70.0
-  pitch_min_deg: -25.0
-  pitch_max_deg: 25.0
-  roll_min_deg: -20.0
-  roll_max_deg: 20.0
-  kp: 200.0
-  kd: 5.0
+# Order: left arm (7), right arm (7), head yaw/pitch/roll (3).
+# Positions are radians. Verify mechanical joint limits for the actual robot.
+joints:
+  kp: [100, 80, 60, 60, 40, 40, 40, 100, 80, 60, 60, 40, 40, 40, 40, 40, 40]
+  kd: [5, 4, 3, 3, 2, 2, 2, 5, 4, 3, 3, 2, 2, 2, 2, 2, 2]
+  lower: [-3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -1.2217304764, -0.4363323130, -0.3490658504]
+  upper: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 1.2217304764, 0.4363323130, 0.3490658504]
+  max_velocity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.2, 1.2, 1.2]
+
+# Named arm gestures are calibrated waypoints, not built-in guessed poses.
+# Each step accepts duration_seconds plus left_arm(7), right_arm(7), and/or head(3).
+actions: {}

@@ -102,9 +102,12 @@ void installService(const std::vector<std::string> &arguments,
                     const std::string &executable_path) {
   requireRoot();
   bool force_config = false;
+  bool no_start = false;
   for (const auto &arg : arguments) {
     if (arg == "--force-config") {
       force_config = true;
+    } else if (arg == "--no-start") {
+      no_start = true;
     } else {
       throw std::runtime_error("unknown install option: " + arg);
     }
@@ -113,10 +116,15 @@ void installService(const std::vector<std::string> &arguments,
   std::filesystem::create_directories(kInstallDirectory);
 
   // Copy binary
+  const auto temporary_binary = std::string(kInstalledBinary) + ".tmp." + std::to_string(::getpid());
   std::filesystem::copy_file(
-      executable_path, kInstalledBinary,
+      executable_path, temporary_binary,
       std::filesystem::copy_options::overwrite_existing);
-  ::chmod(kInstalledBinary, 0755);
+  if (::chmod(temporary_binary.c_str(), 0755) != 0) {
+    std::filesystem::remove(temporary_binary);
+    throw std::runtime_error("cannot set installed binary permissions");
+  }
+  std::filesystem::rename(temporary_binary, kInstalledBinary);
 
   // Write config if missing or forced
   if (force_config || !std::filesystem::exists(kInstalledConfig)) {
@@ -127,9 +135,13 @@ void installService(const std::vector<std::string> &arguments,
   writeFileAtomic(kUnitPath, systemdUnitContent(), 0644);
 
   runCommand({"systemctl", "daemon-reload"});
-  runCommand({"systemctl", "enable", "--now", "chat2me-motion.service"});
-
-  std::cout << "已成功安装 chat2me-motion 服务并自启。\n";
+  if (no_start) {
+    std::cout << "已安装 chat2me-motion，未启用或启动服务。\n";
+  } else {
+    runCommand({"systemctl", "enable", "chat2me-motion.service"});
+    runCommand({"systemctl", "restart", "chat2me-motion.service"});
+    std::cout << "已安装并启动 chat2me-motion 服务。\n";
+  }
 }
 
 void uninstallService(const std::vector<std::string> &arguments) {

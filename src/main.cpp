@@ -31,7 +31,7 @@ std::string executablePath() {
 void usage(std::ostream &stream) {
   stream << "Usage:\n"
          << "  chat2me-motion run [--config PATH]\n"
-         << "  chat2me-motion service install [--force-config]\n"
+         << "  chat2me-motion service install [--force-config] [--no-start]\n"
          << "  chat2me-motion service uninstall\n"
          << "  chat2me-motion service status\n"
          << "  chat2me-motion --version\n";
@@ -75,14 +75,14 @@ int main(int argc, char **argv) {
 
     const auto config = chat2me_motion::loadConfig(config_path);
 
-    ::setenv("ROS_LOCALHOST_ONLY", config.ros.localhost_only ? "1" : "0", 1);
-    const auto domain = std::to_string(config.ros.domain_id);
+    ::setenv("ROS_LOCALHOST_ONLY", config.localhost_only ? "1" : "0", 1);
+    const auto domain = std::to_string(config.domain_id);
     ::setenv("ROS_DOMAIN_ID", domain.c_str(), 1);
 
     rclcpp::init(0, nullptr);
     auto controller = std::make_shared<chat2me_motion::MotionController>(config);
 
-    chat2me_motion::UdsServer server(config.server.socket_path, controller);
+    chat2me_motion::UdsServer server(config.socket_path, controller->engine());
     server.start();
 
     rclcpp::spin(controller);

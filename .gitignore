@@ -1,6 +1,36 @@
+# CMake and colcon outputs
 build/
+/build-*/
+/cmake-build-*/
 install/
 log/
 dist/
+/CMakeCache.txt
+/CMakeFiles/
+/Testing/
+/CTestTestfile.cmake
+/cmake_install.cmake
+/install_manifest.txt
+/compile_commands.json
+
+# Local runtime and tooling files
 .cache/
+/.venv/
+/venv/
+/.env
+/.env.*
+!/.env.example
+/.agents/
+/.codex/
 *.sock
+
+# Python helpers and test artifacts
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
