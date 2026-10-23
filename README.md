@@ -1,82 +1,263 @@
-# Chat2Me Motion
+# Chat2Me Motion 使用指南
 
-通过 Unix socket 接收动作请求，生成头部与双臂的连续轨迹，并向 RL 控制器发布统一的 17 关节指令。底层电机命令由 `debug_sim2real_wbc_23dof_yuquan_throw_kpkd_zero_cmd_vel_ros2_head.py` 负责。
+Chat2Me Motion 接收语音系统或 HTTP 客户端的动作请求，控制机器人头部与双臂。需要配合支持 17 关节头臂指令的 RL 控制器使用，动作通过 `/throw/arm_joint_command` 下发。
 
-控制链路：`chat2me-core → /action → /throw/arm_joint_command → _head.py → 电机驱动`。
+## 下载安装
 
-## 构建
+从 [GitHub Releases](https://github.com/chaeoi/chat2me-motion/releases) 下载预编译程序，按机器人主机的 CPU 架构选择：
 
-需要 ROS 2 Humble、C++17、CMake、`libyaml-cpp-dev`。JSON 解析使用仓库内的 picojson，不需要安装额外 JSON 库。
+| `uname -m` 输出 | 下载文件 |
+| --- | --- |
+| `aarch64`、`arm64` | `chat2me-motion-linux-arm64` |
+| `x86_64`、`amd64` | `chat2me-motion-linux-amd64` |
 
-```bash
-source /opt/ros/humble/setup.bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
-cmake --build build -j2
-ctest --test-dir build --output-on-failure
-```
-
-没有 ROS 的环境也可运行全部控制逻辑和协议测试：
+以下命令自动选择架构，下载最新版本：
 
 ```bash
-cmake -S . -B build-offline -DCHAT2ME_MOTION_WITH_ROS=OFF
-cmake --build build-offline -j2
-ctest --test-dir build-offline --output-on-failure
+case "$(uname -m)" in
+  aarch64|arm64) motion_arch=arm64 ;;
+  x86_64|amd64) motion_arch=amd64 ;;
+  *) echo "不支持的 CPU 架构"; exit 1 ;;
+esac
+
+curl -fL "https://github.com/chaeoi/chat2me-motion/releases/latest/download/chat2me-motion-linux-${motion_arch}" -o chat2me-motion
+chmod +x chat2me-motion
+./chat2me-motion --version
 ```
 
-测试使用内存中的模拟反馈和临时 Unix socket，不创建 ROS 节点、不访问电机。`motion_offline_server` 仅供 `chat2me` 的跨仓库协议测试使用，也不链接 ROS。
+下载后的文件名可以自定，安装器会统一复制为 `/opt/chat2me/motion/chat2me-motion`。例如将下载文件命名为 `motion`，执行的安装命令就是 `sudo ./motion service install --no-start`；systemd 使用的是安装后的正式文件。
 
-## 配置与运行条件
+`/opt` 下的安装目录通常由 root 管理。直接下载到该目录时需要 `sudo wget` 或 `sudo curl`；上面的下载命令可先在用户有写权限的目录执行，再由安装器写入正式位置。
 
-配置示例见 `config/config.example.yml`。启动时必须指定可读配置；缺失配置或旧版 `neck` / `pt_control_topic` 配置会明确报错。旧版配置需要按新示例迁移，不能只修改话题名称。
+运行环境为 Ubuntu 22.04、ROS 2 Humble，需要安装 yaml-cpp 运行库；Ubuntu 22.04 的包名为 `libyaml-cpp0.7`。
 
-- 反馈：`/motor/q2w_upper_motor_joint_state`，32 关节 `JointState`，订阅兼容 BestEffort 和 Reliable。
-- 输出：`/throw/arm_joint_command`，使用左臂 7、右臂 7、头 yaw/pitch/roll 3 的顺序。`position=[q(17),kp(17)]`，`velocity=[qd(17),kd(17)]`，`effort=tau(17)`；当前前馈力矩为零。
-- `_head.py` 需要处于 disturb 策略的 X-MANUAL 模式。此服务的 `202 accepted` 表示轨迹已接收，不表示机器人已经执行。
-- 服务启动或仅收到反馈时不发指令。首个有效动作从当前反馈姿态初始化全部 17 个关节；动作结束后持续发布保持目标。头部动作保留双臂已设定的目标和增益。
-- 反馈超过 `feedback_timeout_seconds` 未更新时停止发布并取消轨迹；反馈恢复后进入 `waiting_action`，需要新的动作请求，不会续播旧动作。
-- `joints.lower/upper` 和 `max_velocity` 均为 17 维，单位为 rad 和 rad/s。示例的手臂 ±π 是数值边界，需要替换为实机机械限位。头部 yaw 始终不能配置到 ±70° 以外。
-- 不应另开一个发布器分别发送手臂指令；头臂目标需要经此服务统一维护，避免在 `_head.py` 中互相覆盖。
-
-以下命令会运行正式服务，仅在计划进行实机控制时使用：
+先安装程序和 systemd 服务文件，暂不启动：
 
 ```bash
-build/chat2me-motion run --config /path/to/config.yml
+sudo ./chat2me-motion service install --no-start
 ```
 
-`service install --no-start` 只安装文件与 unit，不启用或启动服务。`service install` 安装并启用、重启服务；`--force-config` 明确覆盖已存在的配置。安装不自动把旧配置转换为新配置。
+安装位置：
 
-## HTTP 接口
+| 内容 | 路径 |
+| --- | --- |
+| 程序 | `/opt/chat2me/motion/chat2me-motion` |
+| 配置 | `/opt/chat2me/motion/config.yml` |
+| systemd 服务 | `chat2me-motion.service` |
 
-通过配置中的 Unix socket 使用标准 HTTP。仅支持 `GET /health`、`POST /action`、`POST /stop`。
+首次安装会生成配置文件；已有配置会保留。
 
-动作请求：
+## 配置机器人连接
+
+编辑配置：
+
+```bash
+sudoedit /opt/chat2me/motion/config.yml
+```
+
+主要配置如下，完整参数见 [配置示例](config/config.example.yml)：
+
+```yaml
+server:
+  socket_path: /opt/chat2me/motion/motion.sock
+
+ros:
+  domain_id: 0
+  localhost_only: false
+  joint_state_topic: /motor/q2w_upper_motor_joint_state
+  joint_command_topic: /throw/arm_joint_command
+  control_hz: 50
+  feedback_timeout_seconds: 0.5
+
+actions: {}
+```
+
+`domain_id` 必须与电机驱动、RL 控制器一致。`joint_state_topic` 接收 32 关节反馈，`joint_command_topic` 连接头臂控制器。动作生效需要 RL 控制器处于 **disturb 策略的 X-MANUAL 模式**。
+
+关节参数在 `joints` 下配置，顺序为左臂 7、右臂 7、头部 yaw/pitch/roll 3：
+
+| 参数 | 含义 |
+| --- | --- |
+| `kp`、`kd` | 每个关节的位置、速度增益，各 17 项 |
+| `lower`、`upper` | 每个关节的角度下限、上限，单位 rad，各 17 项 |
+| `max_velocity` | 每个关节的最大目标速度，单位 rad/s，共 17 项 |
+
+手臂限位需使用实机标定值，配置示例中的 ±π 仅为数值边界。头部 yaw 限位不能超过 ±70°。修改配置后重启服务生效。
+
+旧版包含 `neck` 或 `pt_control_topic` 的配置需要按新示例迁移。`--force-config` 会覆盖已有配置，仅在需要重置时使用。
+
+## 启动与检查
+
+启动服务并设置开机启动：
+
+```bash
+sudo systemctl enable --now chat2me-motion.service
+```
+
+查看服务状态和日志：
+
+```bash
+/opt/chat2me/motion/chat2me-motion service status
+sudo journalctl -u chat2me-motion.service -n 100 --no-pager
+```
+
+检查连接状态，此请求不触发动作：
+
+```bash
+sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock http://localhost/health
+```
+
+`ready=true` 表示电机反馈可用；没有收到反馈或反馈过期时返回 HTTP `503`。`state` 表示当前轨迹状态，如 `waiting_action`、`running`、`completed`、`timed_out`、`stopped`。`ready` 不表示 RL 控制器已经切到 MANUAL，需要同时确认其控制模式。
+
+服务在收到首个有效动作请求后才开始发布目标。动作结束后保持目标姿态；反馈中断时取消动作并停止发布，恢复后等待新的动作请求。
+
+## 接入 Chat2Me
+
+在 Chat2Me 使用的 env 中配置：
+
+```env
+MOTION_ENABLED=1
+MOTION_SOCKET_DIR=/opt/chat2me/motion
+MOTION_SOCKET=/opt/chat2me/motion/motion.sock
+MOTION_CONNECT_TIMEOUT_SECONDS=0.3
+MOTION_READ_TIMEOUT_SECONDS=1.0
+MOTION_ACTION_TIMEOUT_MS=10000
+```
+
+`MOTION_SOCKET` 必须与 motion 配置的 `server.socket_path` 一致，`MOTION_SOCKET_DIR` 是该 socket 所在的挂载目录。Chat2Me 的 UDS 路径完全由 env 指定，未配置或为空会报错。
+
+Compose 需要读取同一份 env。若使用 `config/runtime.env`，在 Chat2Me 仓库中给 `docker compose` 加上 `--env-file config/runtime.env`；修改挂载目录后需重新创建 Core 容器。
+
+语音指令在 Chat2Me 的 `config/profile.yaml` 中配置。例如带 `action: nod` 的条目可以触发点头；标定好的自定义手臂动作也可用同样方式绑定语音指令。
+
+## 手动调用动作
+
+以下 `/action` 请求会执行动作，使用前需完成机器人连接配置并进入 X-MANUAL 模式。示例 socket 路径应替换为实际配置值。
+
+### 头部动作
+
+| 动作名称 | 效果 |
+| --- | --- |
+| `nod` | 点头 |
+| `shake` | 摇头 |
+| `look_around` | 左右环顾 |
+| `think` | 侧头思考 |
+| `look_at` | 转向指定声源方向，短暂停留后回中 |
+
+点头：
+
+```bash
+sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"nod-1","name":"nod","params":{},"preempt":true,"timeout_ms":10000}' \
+  http://localhost/action
+```
+
+看向右侧声源：
+
+```bash
+sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"look-1","name":"look_at","params":{"direction_deg":90},"preempt":true,"timeout_ms":10000}' \
+  http://localhost/action
+```
+
+`direction_deg` 约定为 0°=正前、90°=右、270°=左，头部目标会按配置限幅。头部动作会保留双臂已有的目标和增益。
+
+### 设置头臂目标
+
+使用 `move_joints`，在 `params` 中提供需要改变的关节组：
+
+| 参数 | 格式 |
+| --- | --- |
+| `left_arm` | 左臂 7 个关节角，单位 rad |
+| `right_arm` | 右臂 7 个关节角，单位 rad |
+| `head` | `[yaw, pitch, roll]`，单位 rad |
+| `duration_ms` | 目标运动时长，默认 1000 ms |
+
+三组目标可同时提供，省略的关节保持原目标。手臂角度需使用已标定数据。
+
+两臂各自的关节顺序均为：肩 pitch、肩 roll、肩 yaw、肘 pitch、腕 yaw、腕 pitch、腕 roll。
+
+下面示例仅改变头部目标：
 
 ```json
-{"id":"act-123","name":"nod","params":{},"preempt":true,"timeout_ms":10000}
+{"id":"pose-1","name":"move_joints","params":{"head":[0.1,0,0],"duration_ms":1000},"preempt":true,"timeout_ms":10000}
 ```
 
-成功响应为 `202`：
+将该 JSON 作为上面 `/action` 请求的请求体即可。
+
+### 自定义动作
+
+在 `config.yml` 的 `actions` 下添加已标定的轨迹。每个动作是一个步骤列表，每步可设置 `left_arm`、`right_arm`、`head` 和 `duration_seconds`。
+
+例如增加一个头部动作：
+
+```yaml
+actions:
+  look_left:
+    - duration_seconds: 1.0
+      head: [0.3, 0.0, 0.0]
+    - duration_seconds: 1.0
+      head: [0.0, 0.0, 0.0]
+```
+
+保存并重启服务后，将 `/action` 请求的 `name` 设为 `look_left` 即可调用。自定义动作不能与内置名称重名。
+
+### 接收结果与停止动作
+
+请求接收成功时返回 HTTP `202`：
 
 ```json
-{"ok":true,"status":"accepted","id":"act-123","action":"nod"}
+{"ok":true,"status":"accepted","id":"nod-1","action":"nod"}
 ```
 
-`preempt=true` 以当前插值位置重新规划；`false` 时若有动作正在执行则返回 `409`。不积压过时动作。`timeout_ms` 范围为 1–30000；超过配置速度时轨迹自动延长，若总时长超过请求超时则在执行前返回 `422`。每段使用五次多项式插值，同时输出位置和解析速度。
+这表示轨迹已接收，不代表电机已经到位。可通过 `/health` 查看对应动作 ID 和轨迹状态。
 
-内置动作：`nod`、`shake`、`look_around`、`think`、`look_at`。`look_at` 从 `params.direction_deg` 读取声源方向，约定 0°=正前、90°=右、270°=左。角度会转换为机器人 yaw 并限幅。兼容旧请求中的顶层 `direction_deg`，两处同时提供会拒绝。
+`preempt=true` 会替换当前动作；设为 `false` 时，如果已有动作正在执行则返回 `409`。`timeout_ms` 范围为 1–30000。服务会按最大速度限制延长运动时长，若总时长超过请求超时则返回 `422`。
 
-直接设置头臂目标使用 `move_joints`，`params` 可提供 `left_arm`（7 维）、`right_arm`（7 维）、`head`（3 维）以及 `duration_ms`。省略的关节保持原目标。示例仅展示协议：
+取消当前轨迹并保持当前插值位置：
 
-```json
-{"id":"pose-1","name":"move_joints","params":{"left_arm":[0,0,0,0,0,0,0],"right_arm":[0,0,0,0,0,0,0],"head":[0,0,0],"duration_ms":2000},"preempt":true,"timeout_ms":10000}
+```bash
+sudo curl -sS -d '' --unix-socket /opt/chat2me/motion/motion.sock http://localhost/stop
 ```
 
-自定义手臂动作在 `actions` 下定义为 waypoint 列表，每步包含 `duration_seconds` 和需要改变的 `left_arm`、`right_arm`、`head`。数值需要来自已标定的动作。配置后以动作名称调用 `/action`；启动检查会拒绝越界、非有限数值、空轨迹或覆盖内置名称。
+`/stop` 是轨迹停止接口，实机急停仍使用控制器或硬件提供的急停方式。
 
-`/health` 返回反馈年龄、发布状态、当前动作 ID、状态及支持的动作列表。没有新鲜反馈时返回 `503`。动作状态为 `running`、`completed`、`timed_out`、`stopped` 等，反映轨迹生成状态，不代替电机到位反馈。
+## 服务管理与升级
 
-`POST /stop` 取消当前轨迹并以零目标速度保持当前插值位置。未知动作、错误参数和越界目标返回 `422`；无有效反馈返回 `503`；错误 JSON 或 HTTP 返回 `400`。
+| 操作 | 命令 |
+| --- | --- |
+| 重启并读取新配置 | `sudo systemctl restart chat2me-motion.service` |
+| 停止服务 | `sudo systemctl stop chat2me-motion.service` |
+| 取消开机启动 | `sudo systemctl disable chat2me-motion.service` |
+| 持续查看日志 | `sudo journalctl -u chat2me-motion.service -f` |
 
-## 第三方代码
+升级时先下载新版本，再执行：
 
-`third_party/picojson.h` 来自 [picojson v1.3.0](https://github.com/kazuho/picojson/tree/v1.3.0)，保留原始 BSD 许可证；随二进制安装的许可证见 `third_party/NOTICE`。
+```bash
+sudo systemctl stop chat2me-motion.service
+sudo ./chat2me-motion service install --no-start
+sudo systemctl start chat2me-motion.service
+```
+
+升级保留已有配置。直接使用 `service install` 会安装、启用并重启服务；先编辑配置时使用 `--no-start`。
+
+卸载会停止服务，并删除 `/opt/chat2me/motion` 下的程序、配置和 socket：
+
+```bash
+sudo /opt/chat2me/motion/chat2me-motion service uninstall
+```
+
+## 常见问题
+
+| 现象 | 处理方式 |
+| --- | --- |
+| socket 不存在 | 查看服务状态和日志，确认配置中的 `socket_path` 与调用路径一致 |
+| socket 连接报权限错误 | 宿主机调试使用 `sudo curl`；容器调用时检查挂载目录和访问权限 |
+| `/health` 返回 `503` | 检查电机反馈话题、ROS domain 和反馈是否持续更新 |
+| `ready=true` 但机器人没有执行 | 确认 RL 控制器处于 disturb 策略的 X-MANUAL 模式，且使用相同的指令话题 |
+| 动作请求返回 `422` | 查看响应中的 `error`，检查动作名、关节维数、限位和超时时间 |
+| 启动提示缺少 `libyaml-cpp.so.0.7` | Ubuntu 22.04 安装运行库：`sudo apt install libyaml-cpp0.7` |
+
+第三方许可证见 [NOTICE](third_party/NOTICE)。
