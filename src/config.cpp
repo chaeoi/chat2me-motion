@@ -51,7 +51,7 @@ void validateConfig(const MotionConfig &c) {
       throw std::runtime_error("invalid joint gains, limits, or maximum velocity");
   }
   constexpr double yaw_limit = 70.0 * 3.14159265358979323846 / 180.0;
-  if (c.lower[14] < -yaw_limit - 1e-9 || c.upper[14] > yaw_limit + 1e-9)
+  if (c.lower[kHeadYaw] < -yaw_limit - 1e-9 || c.upper[kHeadYaw] > yaw_limit + 1e-9)
     throw std::runtime_error("head yaw limits must remain inside +/-70 degrees");
   for (const auto &[name, steps] : c.actions) {
     if (name.empty() || steps.empty() || steps.size() > 100)
@@ -75,6 +75,7 @@ MotionConfig loadConfig(const std::string &path) {
   const auto root = YAML::LoadFile(path);
   if (!root.IsMap()) throw std::runtime_error("motion configuration must be a mapping");
   MotionConfig c;
+  scalar(root, "arm_gestures", c.arm_gestures);
   auto ros = root["ros"];
   if (root["neck"] || (ros && ros["pt_control_topic"]))
     throw std::runtime_error("legacy direct-motor configuration: migrate using config.example.yml");
@@ -127,6 +128,7 @@ ros:
   joint_command_topic: /throw/arm_joint_command
   control_hz: 50
   feedback_timeout_seconds: 0.5
+arm_gestures: true
 actions: {}
 )";
 }

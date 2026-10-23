@@ -6,6 +6,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -84,25 +85,109 @@ void testTrajectoryAndPacking() {
     near(packed.effort[i], 0, "unexpected feed-forward torque");
   }
   check(packed.names[0] == "19_left_shoulder_pitch" && packed.names[7] == "26_right_shoulder_pitch" &&
-        packed.names[14] == "head_yaw" && packed.names[16] == "head_roll", "joint mapping changed");
+        packed.names[14] == "16_neck_yaw" && packed.names[15] == "17_neck_pitch" &&
+        packed.names[16] == "18_neck_roll", "joint names do not match the URDF");
   check(engine.status(3).state == "completed", "missing completion status");
 }
 
 void testHeadPreservesBothArms() {
-  MotionEngine engine(MotionConfig{});
-  auto measured = feedback();
-  engine.updateFeedback(measured, 0);
-  ActionGoal nod;
-  nod.id = "nod-1";
-  nod.name = "nod";
-  engine.submit(nod, 0);
-  for (int i = 0; i < 200; ++i) {
-    const auto now = i * .02;
-    engine.updateFeedback(measured, now);
-    auto command = *engine.tick(now);
-    for (std::size_t j = 0; j < 14; ++j) near(command.position[j], measured[j + 3], "nod moved an arm");
-    const auto packed = packCommand(command, MotionConfig{});
-    for (std::size_t j = 0; j < 14; ++j) check(packed.position[17 + j] > 0, "nod cleared arm gains");
+  for (const auto &name : {"nod", "think"}) {
+    MotionConfig config;
+    config.arm_gestures = false;
+    MotionEngine engine(config);
+    auto measured = feedback();
+    engine.updateFeedback(measured, 0);
+    ActionGoal goal;
+    goal.id = name;
+    goal.name = name;
+    engine.submit(goal, 0);
+    for (int i = 0; i <= 200; ++i) {
+      const auto now = i * .02;
+      engine.updateFeedback(measured, now);
+      auto command = *engine.tick(now);
+      for (std::size_t j = 0; j < 14; ++j)
+        near(command.position[j], measured[j + 3], "head-only action moved an arm");
+      const auto packed = packCommand(command, config);
+      for (std::size_t j = 0; j < 14; ++j)
+        check(packed.position[17 + j] > 0, "head-only action cleared arm gains");
+    }
+    check(engine.status(4).state == "completed", "head-only action retained arm staging delays");
+    for (std::size_t j = kHeadYaw; j < kJointCount; ++j)
+      near(engine.tick(4)->position[j], measured[j + 3], "head-only action did not restore its starting pose");
+  }
+}
+
+void testYawActionsDoNotRecenterOtherAxes() {
+  for (const auto &name : {"shake", "look_around", "look_at"}) {
+    MotionConfig config;
+    MotionEngine engine(config);
+    auto measured = feedback();
+    measured[17] = .25;
+    measured[18] = .20;
+    measured[19] = -.12;
+    engine.updateFeedback(measured, 0);
+    ActionGoal goal;
+    goal.id = std::string("yaw-") + name;
+    goal.name = name;
+    goal.direction_deg = 90;
+    engine.submit(goal, 0);
+    double minimum_yaw = measured[17];
+    for (int frame = 0; frame <= 500; ++frame) {
+      const double now = frame * .02;
+      engine.updateFeedback(measured, now);
+      auto command = engine.tick(now);
+      check(command.has_value(), "yaw action stopped publishing");
+      minimum_yaw = std::min(minimum_yaw, command->position[kHeadYaw]);
+      for (std::size_t joint = 0; joint < kJointCount; ++joint) {
+        if (joint == kHeadYaw) continue;
+        near(command->position[joint], measured[joint + 3], "yaw action changed an unrelated joint");
+        near(command->velocity[joint], 0, "yaw action commanded pitch/roll or arm velocity");
+      }
+    }
+    check(minimum_yaw < measured[17] - .1, "yaw action never turned the head");
+    near(engine.tick(10)->position[kHeadYaw], measured[17], "yaw action did not return to initial yaw");
+    check(engine.status(10).state == "completed", "yaw action exceeded its timeout");
+  }
+}
+
+void testArmGesturesReturnToTheirInitialPose() {
+  for (const auto &name : {"nod", "think"}) {
+    MotionConfig config;
+    MotionEngine engine(config);
+    auto measured = feedback();
+    measured[17] = .25;
+    measured[18] = .15;
+    measured[19] = -.12;
+    engine.updateFeedback(measured, 0);
+    ActionGoal goal;
+    goal.id = std::string("gesture-") + name;
+    goal.name = name;
+    engine.submit(goal, 0);
+    const bool left = std::string(name) == "nod";
+    const std::size_t offset = left ? 0 : 7;
+    std::array<double, 7> excursion{};
+    for (int frame = 0; frame <= 500; ++frame) {
+      const double now = frame * .02;
+      engine.updateFeedback(measured, now);
+      auto command = *engine.tick(now);
+      for (std::size_t i = 0; i < excursion.size(); ++i)
+        excursion[i] = std::max(excursion[i], std::abs(command.position[offset + i] - measured[offset + i + 3]));
+      for (std::size_t joint = 0; joint < kJointCount; ++joint) {
+        check(command.position[joint] >= config.lower[joint] - 1e-8 &&
+              command.position[joint] <= config.upper[joint] + 1e-8, "gesture exceeded a joint limit");
+        check(std::abs(command.velocity[joint]) <= config.max_velocity[joint] + 1e-8,
+              "gesture exceeded a joint velocity limit");
+        const bool selected = (joint >= offset && joint < offset + 7) || joint == kHeadPitch ||
+                              (!left && joint == kHeadRoll);
+        if (!selected) near(command.position[joint], measured[joint + 3], "gesture changed an unrelated joint");
+      }
+    }
+    for (const double delta : excursion)
+      check(delta > .1, "gesture did not coordinate all seven arm joints");
+    const auto final = *engine.tick(10);
+    for (std::size_t joint = 0; joint < kJointCount; ++joint)
+      near(final.position[joint], measured[joint + 3], "gesture did not return to its initial pose");
+    check(engine.status(10).state == "completed", "arm gesture exceeded its timeout");
   }
 }
 
@@ -200,6 +285,9 @@ void testConfig() {
   { std::ofstream file(path); file << defaultConfigFileContent(); }
   auto config = loadConfig(path.string());
   check(config.command_topic == "/throw/arm_joint_command", "wrong default command topic");
+  check(config.arm_gestures, "default configuration disabled the requested arm gestures");
+  { std::ofstream file(path); file << "arm_gestures: false\n"; }
+  check(!loadConfig(path.string()).arm_gestures, "head-only configuration was not respected");
   { std::ofstream file(path); file << "ros:\n  pt_control_topic: /motor/tt_upper_motor_pt_control_data\n"; }
   bool failed = false;
   try { loadConfig(path.string()); } catch (const std::exception &) { failed = true; }
@@ -251,6 +339,8 @@ int main() {
   try {
     testTrajectoryAndPacking();
     testHeadPreservesBothArms();
+    testYawActionsDoNotRecenterOtherAxes();
+    testArmGesturesReturnToTheirInitialPose();
     testFeedbackLossAndPreemption();
     testDeadlineAndValidation();
     testProtocol();

@@ -12,7 +12,7 @@ constexpr std::array<const char *, kJointCount> kNames{
     "22_left_elbow_pitch", "23_left_wrist_yaw", "24_left_wrist_pitch", "25_left_wrist_roll",
     "26_right_shoulder_pitch", "27_right_shoulder_roll", "28_right_shoulder_yaw",
     "29_right_elbow_pitch", "30_right_wrist_yaw", "31_right_wrist_pitch", "32_right_wrist_roll",
-    "head_yaw", "head_pitch", "head_roll"};
+    "16_neck_yaw", "17_neck_pitch", "18_neck_roll"};
 }
 
 PackedCommand packCommand(const JointCommand &command, const MotionConfig &config) {
@@ -73,41 +73,79 @@ std::vector<Waypoint> MotionEngine::waypoints(const ActionGoal &goal, const Join
   if (configured != config_.actions.end()) return configured->second;
 
   std::vector<Waypoint> steps;
-  auto head = [&](double yaw, double pitch, double roll, double duration) {
-    Waypoint step;
-    step.targets[14] = std::clamp(yaw, config_.lower[14], config_.upper[14]);
-    step.targets[15] = std::clamp(pitch, config_.lower[15], config_.upper[15]);
-    step.targets[16] = std::clamp(roll, config_.lower[16], config_.upper[16]);
-    step.duration = duration;
-    steps.push_back(step);
+  auto step = [&](double duration) -> Waypoint & {
+    steps.push_back({{}, duration});
+    return steps.back();
   };
-  const double y = start[14], p = start[15], r = start[16];
+  auto target = [&](Waypoint &point, std::size_t joint, double value) {
+    point.targets[joint] = std::clamp(value, config_.lower[joint], config_.upper[joint]);
+  };
+  auto arm = [&](Waypoint &point, std::size_t offset, const std::array<double, 7> &degrees) {
+    if (!config_.arm_gestures) return;
+    for (std::size_t i = 0; i < degrees.size(); ++i)
+      target(point, offset + i, start[offset + i] + degrees[i] * kDeg);
+  };
+  // The first neck joint is Z-axis yaw. Do not reset the other axes during yaw motions.
+  auto yaw = [&](double angle, double duration) {
+    target(step(duration), kHeadYaw, angle);
+  };
+  auto gesture = [&](double duration, std::size_t offset, const std::array<double, 7> &degrees,
+                     double pitch_degrees, double roll_degrees = 0) {
+    auto &point = step(duration);
+    target(point, kHeadPitch, start[kHeadPitch] + pitch_degrees * kDeg);
+    target(point, kHeadRoll, start[kHeadRoll] + roll_degrees * kDeg);
+    arm(point, offset, degrees);
+  };
+  const double y = start[kHeadYaw];
   if (goal.name == "nod") {
-    head(y, 15 * kDeg, r, .45);
-    head(y, 15 * kDeg, r, .1);
-    head(y, -5 * kDeg, r, .4);
-    head(y, 0, 0, .35);
+    if (!config_.arm_gestures) {
+      gesture(.45, 0, {}, 15);
+      gesture(.1, 0, {}, 15);
+      gesture(.4, 0, {}, -5);
+      gesture(.45, 0, {}, 0);
+      return steps;
+    }
+    // Shoulder pitch/roll/yaw, elbow pitch, wrist yaw/pitch/roll, in degrees.
+    // Open the shoulder before lifting; close it after the forearm is lowered.
+    gesture(1.0, 0, {0, 10, 0, 0, 0, 0, 0}, 0);
+    gesture(2.05, 0, {-18, 14, -10, -30, 10, -8, 20}, -3);
+    gesture(1.2, 0, {-28, 20, -18, -45, 20, -12, 35}, 12);
+    gesture(.75, 0, {-25, 18, -10, -40, 12, -5, 25}, -4);
+    gesture(.4, 0, {-25, 18, -10, -40, 12, -5, 25}, 9);
+    gesture(1.15, 0, {-15, 12, -5, -25, 5, 0, 12}, 0);
+    gesture(1.9, 0, {0, 10, 0, 0, 0, 0, 0}, 0);
+    gesture(1.0, 0, {}, 0);
   } else if (goal.name == "shake") {
-    head(30 * kDeg, p, r, .35);
-    head(-30 * kDeg, p, r, .5);
-    head(15 * kDeg, p, r, .35);
-    head(0, 0, 0, .35);
+    yaw(y + 30 * kDeg, .35);
+    yaw(y - 30 * kDeg, .5);
+    yaw(y + 15 * kDeg, .35);
+    yaw(y, .35);
   } else if (goal.name == "look_around") {
-    const double limit = std::min(-config_.lower[14], config_.upper[14]) * .85;
-    head(-limit, p, r, .8);
-    head(-limit, p, r, .35);
-    head(limit, p, r, 1.2);
-    head(limit, p, r, .35);
-    head(0, 0, 0, .8);
+    yaw(config_.lower[kHeadYaw] * .85, .8);
+    yaw(config_.lower[kHeadYaw] * .85, .35);
+    yaw(config_.upper[kHeadYaw] * .85, 1.2);
+    yaw(config_.upper[kHeadYaw] * .85, .35);
+    yaw(y, .8);
   } else if (goal.name == "think") {
-    head(y, -8 * kDeg, 15 * kDeg, .65);
-    head(y, -8 * kDeg, 15 * kDeg, 1.2);
-    head(0, 0, 0, .7);
+    if (!config_.arm_gestures) {
+      gesture(.65, 7, {}, -8, 15);
+      gesture(1.2, 7, {}, -8, 15);
+      gesture(.7, 7, {}, 0);
+      return steps;
+    }
+    gesture(1.0, 7, {0, -10, 0, 0, 0, 0, 0}, 0);
+    gesture(1.95, 7, {-18, -16, 12, -28, -12, -10, -20}, -4, 6);
+    gesture(1.3, 7, {-30, -22, 24, -45, -25, -18, -35}, -8, 12);
+    gesture(1.1, 7, {-27, -20, 16, -45, -10, -6, -20}, -5, 17);
+    gesture(.2, 7, {-27, -20, 16, -45, -10, -6, -20}, -5, 17);
+    gesture(1.6, 7, {-15, -12, 8, -22, -5, 0, -10}, 0, 5);
+    gesture(1.65, 7, {0, -10, 0, 0, 0, 0, 0}, 0);
+    gesture(1.0, 7, {}, 0);
   } else if (goal.name == "look_at") {
-    const double yaw = -std::remainder(goal.direction_deg.value_or(0.0), 360.0) * kDeg;
-    head(yaw, 0, 0, .75);
-    head(yaw, 0, 0, 1.5);
-    head(0, 0, 0, .75);
+    const double angle = -std::remainder(goal.direction_deg.value_or(0.0), 360.0) * kDeg;
+    yaw(angle, .75);
+    yaw(angle, 1.5);
+    yaw(y, .75);
   } else {
     throw RequestError(422, "unknown action: " + goal.name);
   }

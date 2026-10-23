@@ -9,13 +9,17 @@ ros:
   control_hz: 50
   feedback_timeout_seconds: 0.5
 
+# nod coordinates the left arm's seven joints; think uses the right arm.
+# Set false for head-only built-in motions.
+arm_gestures: true
+
 # Order: left arm (7), right arm (7), head yaw/pitch/roll (3).
-# Positions are radians. Verify mechanical joint limits for the actual robot.
+# Limits follow qj2m pin_model/model.urdf; positions are radians.
 joints:
   kp: [100, 80, 60, 60, 40, 40, 40, 100, 80, 60, 60, 40, 40, 40, 40, 40, 40]
   kd: [5, 4, 3, 3, 2, 2, 2, 5, 4, 3, 3, 2, 2, 2, 2, 2, 2]
-  lower: [-3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -1.2217304764, -0.4363323130, -0.3490658504]
-  upper: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 1.2217304764, 0.4363323130, 0.3490658504]
+  lower: [-3.14, -0.523, -3.14, -2.09, -3.14, -1.91, -1.57, -3.14, -3.66, -3.14, -2.09, -3.14, -1.91, -2.09, -1.2217304764, -0.436, -0.3490658504]
+  upper: [3.14, 3.66, 3.14, 2.09, 3.14, 1.91, 2.09, 3.14, 0.523, 3.14, 2.09, 3.14, 1.91, 1.57, 1.2217304764, 0.436, 0.3490658504]
   max_velocity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.2, 1.2, 1.2]
 
 # Named arm gestures are calibrated waypoints, not built-in guessed poses.

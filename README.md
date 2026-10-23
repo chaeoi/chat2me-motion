@@ -69,6 +69,7 @@ ros:
   control_hz: 50
   feedback_timeout_seconds: 0.5
 
+arm_gestures: true
 actions: {}
 ```
 
@@ -82,7 +83,7 @@ actions: {}
 | `lower`、`upper` | 每个关节的角度下限、上限，单位 rad，各 17 项 |
 | `max_velocity` | 每个关节的最大目标速度，单位 rad/s，共 17 项 |
 
-手臂限位需使用实机标定值，配置示例中的 ±π 仅为数值边界。头部 yaw 限位不能超过 ±70°。修改配置后重启服务生效。
+关节限位按 qj2m 的 `pin_model/model.urdf` 设置；头部 yaw 额外限制在 ±70° 内。实机限位与模型不同时按实际数据调整。`arm_gestures: true` 为点头、侧头启用肩、肘、腕七关节配合，先外展再抬臂，分阶段转腕后收回到动作前的姿态；不控制灵巧手和手指。设为 `false` 可只测试头部。修改配置后重启服务生效。
 
 旧版包含 `neck` 或 `pt_control_topic` 的配置需要按新示例迁移。`--force-config` 会覆盖已有配置，仅在需要重置时使用。
 
@@ -117,16 +118,13 @@ sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock http://localhost/hea
 
 ```env
 MOTION_ENABLED=1
-MOTION_SOCKET_DIR=/opt/chat2me/motion
 MOTION_SOCKET=/opt/chat2me/motion/motion.sock
 MOTION_CONNECT_TIMEOUT_SECONDS=0.3
 MOTION_READ_TIMEOUT_SECONDS=1.0
 MOTION_ACTION_TIMEOUT_MS=10000
 ```
 
-`MOTION_SOCKET` 必须与 motion 配置的 `server.socket_path` 一致，`MOTION_SOCKET_DIR` 是该 socket 所在的挂载目录。Chat2Me 的 UDS 路径完全由 env 指定，未配置或为空会报错。
-
-Compose 需要读取同一份 env。若使用 `config/runtime.env`，在 Chat2Me 仓库中给 `docker compose` 加上 `--env-file config/runtime.env`；修改挂载目录后需重新创建 Core 容器。
+`MOTION_SOCKET` 必须与 motion 配置的 `server.socket_path` 一致。Chat2Me 固定挂载安装目录 `/opt/chat2me/motion`，首次启动会自动生成缺失的 `runtime.env`，无需为 Compose 单独配置 socket 环境变量。修改 socket 文件名时保持在该挂载目录内，并同步两边配置。
 
 语音指令在 Chat2Me 的 `config/profile.yaml` 中配置。例如带 `action: nod` 的条目可以触发点头；标定好的自定义手臂动作也可用同样方式绑定语音指令。
 
@@ -138,11 +136,11 @@ Compose 需要读取同一份 env。若使用 `config/runtime.env`，在 Chat2Me
 
 | 动作名称 | 效果 |
 | --- | --- |
-| `nod` | 点头 |
-| `shake` | 摇头 |
-| `look_around` | 左右环顾 |
-| `think` | 侧头思考 |
-| `look_at` | 转向指定声源方向，短暂停留后回中 |
+| `nod` | 左臂外展、抬起、转腕，配合两次点头后收回；默认约 9.45 秒 |
+| `shake` | 只绕头部自旋轴左右摇头 |
+| `look_around` | 只绕头部自旋轴左右环顾 |
+| `think` | 右臂抬起、转腕，配合歪头停顿后收回；默认约 9.8 秒 |
+| `look_at` | 转向指定声源方向，短暂停留后返回原朝向 |
 
 点头：
 
@@ -162,7 +160,7 @@ sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock \
   http://localhost/action
 ```
 
-`direction_deg` 约定为 0°=正前、90°=右、270°=左，头部目标会按配置限幅。头部动作会保留双臂已有的目标和增益。
+`direction_deg` 约定为 0°=正前、90°=右、270°=左，头部目标会按配置限幅。左右转头始终保持动作开始时的俯仰和侧倾，不把其他轴清零。所有内置动作结束后返回动作开始时的姿态；点头和侧头的手臂配合也会返回原位。
 
 ### 设置头臂目标
 
@@ -172,12 +170,14 @@ sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock \
 | --- | --- |
 | `left_arm` | 左臂 7 个关节角，单位 rad |
 | `right_arm` | 右臂 7 个关节角，单位 rad |
-| `head` | `[yaw, pitch, roll]`，单位 rad |
+| `head` | `[yaw, pitch, roll]`，对应 URDF 的 `16_neck_yaw`、`17_neck_pitch`、`18_neck_roll`，单位 rad |
 | `duration_ms` | 目标运动时长，默认 1000 ms |
 
 三组目标可同时提供，省略的关节保持原目标。手臂角度需使用已标定数据。
 
 两臂各自的关节顺序均为：肩 pitch、肩 roll、肩 yaw、肘 pitch、腕 yaw、腕 pitch、腕 roll。
+
+头部三个关节轴按 URDF 分别为 Z 轴自旋、接近 Y 轴的俯仰、接近 −X 轴的侧倾；在 32 电机数组中对应索引 17、18、19（CAN ID 18、19、20）。
 
 下面示例仅改变头部目标：
 
