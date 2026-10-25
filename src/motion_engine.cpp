@@ -7,6 +7,8 @@
 namespace chat2me_motion {
 namespace {
 constexpr double kDeg = 3.14159265358979323846 / 180.0;
+constexpr std::array<std::size_t, kJointCount> kFeedbackPositionIndices{
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 18, 17};
 constexpr std::array<const char *, kJointCount> kNames{
     "19_left_shoulder_pitch", "20_left_shoulder_roll", "21_left_shoulder_yaw",
     "22_left_elbow_pitch", "23_left_wrist_yaw", "24_left_wrist_pitch", "25_left_wrist_roll",
@@ -39,7 +41,7 @@ void MotionEngine::updateFeedback(const std::vector<double> &positions, double n
   if (positions.size() != 32 || !std::isfinite(now)) return;
   JointVector measured;
   for (std::size_t i = 0; i < kJointCount; ++i) {
-    measured[i] = positions[3 + i];
+    measured[i] = positions[kFeedbackPositionIndices[i]];
     if (!std::isfinite(measured[i])) return;
   }
   std::lock_guard<std::mutex> lock(mutex_);

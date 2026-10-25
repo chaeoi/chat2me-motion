@@ -40,6 +40,14 @@ std::vector<double> feedback() {
   return values;
 }
 
+double measuredJoint(const std::vector<double> &values, std::size_t joint) {
+  if (joint < 14) return values[joint + 3];
+  if (joint == kHeadYaw) return values[19];
+  if (joint == kHeadPitch) return values[18];
+  if (joint == kHeadRoll) return values[17];
+  throw std::out_of_range("invalid joint index");
+}
+
 ActionGoal move() {
   ActionGoal goal;
   goal.id = "move-1";
@@ -61,6 +69,10 @@ void testTrajectoryAndPacking() {
   check(!engine.tick(0), "feedback alone must not produce commands");
   check(engine.status(0).state == "waiting_action", "fresh idle feedback reported as missing");
   engine.submit(move(), 0);
+  const auto initial = *engine.tick(0);
+  near(initial.position[kHeadYaw], measured[19], "yaw feedback must use CAN ID 20");
+  near(initial.position[kHeadPitch], measured[18], "pitch feedback must use CAN ID 19");
+  near(initial.position[kHeadRoll], measured[17], "roll feedback must use CAN ID 18");
   for (int frame = 0; frame <= 150; ++frame) {
     const double now = frame * .02;
     engine.updateFeedback(measured, now);
@@ -69,7 +81,7 @@ void testTrajectoryAndPacking() {
     for (std::size_t i = 0; i < 17; ++i)
       check(std::abs(command->velocity[i]) <= config.max_velocity[i] + 1e-8, "velocity limit exceeded");
     for (auto i : {1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 15, 16})
-      near(command->position[i], measured[3 + i], "uncommanded joint changed");
+      near(command->position[i], measuredJoint(measured, i), "uncommanded joint changed");
   }
   auto command = *engine.tick(3);
   near(command.position[0], .3, "left arm target missing");
@@ -106,14 +118,14 @@ void testHeadPreservesBothArms() {
       engine.updateFeedback(measured, now);
       auto command = *engine.tick(now);
       for (std::size_t j = 0; j < 14; ++j)
-        near(command.position[j], measured[j + 3], "head-only action moved an arm");
+        near(command.position[j], measuredJoint(measured, j), "head-only action moved an arm");
       const auto packed = packCommand(command, config);
       for (std::size_t j = 0; j < 14; ++j)
         check(packed.position[17 + j] > 0, "head-only action cleared arm gains");
     }
     check(engine.status(4).state == "completed", "head-only action retained arm staging delays");
     for (std::size_t j = kHeadYaw; j < kJointCount; ++j)
-      near(engine.tick(4)->position[j], measured[j + 3], "head-only action did not restore its starting pose");
+      near(engine.tick(4)->position[j], measuredJoint(measured, j), "head-only action did not restore its starting pose");
   }
 }
 
@@ -122,16 +134,16 @@ void testYawActionsDoNotRecenterOtherAxes() {
     MotionConfig config;
     MotionEngine engine(config);
     auto measured = feedback();
-    measured[17] = .25;
+    measured[19] = .25;
     measured[18] = .20;
-    measured[19] = -.12;
+    measured[17] = -.12;
     engine.updateFeedback(measured, 0);
     ActionGoal goal;
     goal.id = std::string("yaw-") + name;
     goal.name = name;
     goal.direction_deg = 90;
     engine.submit(goal, 0);
-    double minimum_yaw = measured[17];
+    double minimum_yaw = measuredJoint(measured, kHeadYaw);
     for (int frame = 0; frame <= 500; ++frame) {
       const double now = frame * .02;
       engine.updateFeedback(measured, now);
@@ -140,12 +152,12 @@ void testYawActionsDoNotRecenterOtherAxes() {
       minimum_yaw = std::min(minimum_yaw, command->position[kHeadYaw]);
       for (std::size_t joint = 0; joint < kJointCount; ++joint) {
         if (joint == kHeadYaw) continue;
-        near(command->position[joint], measured[joint + 3], "yaw action changed an unrelated joint");
+        near(command->position[joint], measuredJoint(measured, joint), "yaw action changed an unrelated joint");
         near(command->velocity[joint], 0, "yaw action commanded pitch/roll or arm velocity");
       }
     }
-    check(minimum_yaw < measured[17] - .1, "yaw action never turned the head");
-    near(engine.tick(10)->position[kHeadYaw], measured[17], "yaw action did not return to initial yaw");
+    check(minimum_yaw < measuredJoint(measured, kHeadYaw) - .1, "yaw action never turned the head");
+    near(engine.tick(10)->position[kHeadYaw], measuredJoint(measured, kHeadYaw), "yaw action did not return to initial yaw");
     check(engine.status(10).state == "completed", "yaw action exceeded its timeout");
   }
 }
@@ -155,9 +167,9 @@ void testArmGesturesReturnToTheirInitialPose() {
     MotionConfig config;
     MotionEngine engine(config);
     auto measured = feedback();
-    measured[17] = .25;
+    measured[19] = .25;
     measured[18] = .15;
-    measured[19] = -.12;
+    measured[17] = -.12;
     engine.updateFeedback(measured, 0);
     ActionGoal goal;
     goal.id = std::string("gesture-") + name;
@@ -189,7 +201,7 @@ void testArmGesturesReturnToTheirInitialPose() {
         (synchronized.position[offset] - measured[offset + 3]) /
         (gesture_delta_degrees * 3.14159265358979323846 / 180.0);
     const double head_progress =
-        (synchronized.position[kHeadPitch] - measured[kHeadPitch + 3]) /
+        (synchronized.position[kHeadPitch] - measuredJoint(measured, kHeadPitch)) /
         (head_delta_degrees * 3.14159265358979323846 / 180.0);
     check(std::abs(arm_progress - head_progress) < 1e-5 &&
               arm_progress > .05 && arm_progress < .95,
@@ -210,14 +222,14 @@ void testArmGesturesReturnToTheirInitialPose() {
               "gesture exceeded a joint velocity limit");
         const bool selected = (joint >= offset && joint < offset + 7) || joint == kHeadPitch ||
                               (!left && joint == kHeadRoll);
-        if (!selected) near(command.position[joint], measured[joint + 3], "gesture changed an unrelated joint");
+        if (!selected) near(command.position[joint], measuredJoint(measured, joint), "gesture changed an unrelated joint");
       }
     }
     for (const double delta : excursion)
       check(delta > .1, "gesture did not coordinate all seven arm joints");
     const auto final = *engine.tick(10);
     for (std::size_t joint = 0; joint < kJointCount; ++joint)
-      near(final.position[joint], measured[joint + 3], "gesture did not return to its initial pose");
+      near(final.position[joint], measuredJoint(measured, joint), "gesture did not return to its initial pose");
     check(engine.status(10).state == "completed", "arm gesture exceeded its timeout");
   }
 }

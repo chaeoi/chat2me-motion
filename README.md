@@ -177,7 +177,7 @@ sudo curl -sS --unix-socket /opt/chat2me/motion/motion.sock \
 
 两臂各自的关节顺序均为：肩 pitch、肩 roll、肩 yaw、肘 pitch、腕 yaw、腕 pitch、腕 roll。
 
-头部三个关节轴按 URDF 分别为 Z 轴自旋、接近 Y 轴的俯仰、接近 −X 轴的侧倾；在 32 电机数组中对应索引 17、18、19（CAN ID 18、19、20）。
+头部三个关节轴按 URDF 分别为 Z 轴自旋、接近 Y 轴的俯仰、接近 −X 轴的侧倾。命令语义顺序是 yaw/pitch/roll；反馈的 32 电机数组按 CAN ID 1–32 排列，因此这三轴分别读取 ID 20、19、18（零基数组索引 19、18、17）。
 
 下面示例仅改变头部目标：
 
