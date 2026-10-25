@@ -106,15 +106,16 @@ std::vector<Waypoint> MotionEngine::waypoints(const ActionGoal &goal, const Join
       return steps;
     }
     // Shoulder pitch/roll/yaw, elbow pitch, wrist yaw/pitch/roll, in degrees.
-    // Open the shoulder before lifting; close it after the forearm is lowered.
-    gesture(1.0, 0, {0, 10, 0, 0, 0, 0, 0}, 0);
-    gesture(2.05, 0, {-18, 14, -10, -30, 10, -8, 20}, -3);
-    gesture(1.2, 0, {-28, 20, -18, -45, 20, -12, 35}, 12);
-    gesture(.75, 0, {-25, 18, -10, -40, 12, -5, 25}, -4);
-    gesture(.4, 0, {-25, 18, -10, -40, 12, -5, 25}, 9);
-    gesture(1.15, 0, {-15, 12, -5, -25, 5, 0, 12}, 0);
-    gesture(1.9, 0, {0, 10, 0, 0, 0, 0, 0}, 0);
-    gesture(1.0, 0, {}, 0);
+    // Lift the arm and head together, nod while the arm holds, then return both.
+    const std::array<double, 7> open{0, 8, 0, 0, 0, 0, 0};
+    const std::array<double, 7> raised{-14, 14, -8, -28, 10, -6, 18};
+    gesture(.8, 0, open, 0);
+    gesture(1.3, 0, raised, 8);
+    gesture(.45, 0, raised, -8);
+    gesture(.45, 0, raised, 8);
+    gesture(1.0, 0, {-8, 10, -5, -20, 6, -3, 12}, 0);
+    gesture(1.1, 0, open, 0);
+    gesture(.8, 0, {}, 0);
   } else if (goal.name == "shake") {
     yaw(y + 30 * kDeg, .35);
     yaw(y - 30 * kDeg, .5);
@@ -133,14 +134,17 @@ std::vector<Waypoint> MotionEngine::waypoints(const ActionGoal &goal, const Join
       gesture(.7, 7, {}, 0);
       return steps;
     }
-    gesture(1.0, 7, {0, -10, 0, 0, 0, 0, 0}, 0);
-    gesture(1.95, 7, {-18, -16, 12, -28, -12, -10, -20}, -4, 6);
-    gesture(1.3, 7, {-30, -22, 24, -45, -25, -18, -35}, -8, 12);
-    gesture(1.1, 7, {-27, -20, 16, -45, -10, -6, -20}, -5, 17);
-    gesture(.2, 7, {-27, -20, 16, -45, -10, -6, -20}, -5, 17);
-    gesture(1.6, 7, {-15, -12, 8, -22, -5, 0, -10}, 0, 5);
-    gesture(1.65, 7, {0, -10, 0, 0, 0, 0, 0}, 0);
-    gesture(1.0, 7, {}, 0);
+    // Bring the right arm and head into the thinking pose in the same phase.
+    // Hold the arm while the head settles, then return them together.
+    const std::array<double, 7> open{0, -8, 0, 0, 0, 0, 0};
+    const std::array<double, 7> raised{-16, -14, 8, -25, -10, -8, -16};
+    gesture(.9, 7, open, 0);
+    gesture(1.4, 7, raised, -8, 10);
+    gesture(.45, 7, raised, -12, 17);
+    gesture(.45, 7, raised, -8, 10);
+    gesture(1.0, 7, {-12, -10, 5, -18, -8, -4, -10}, -2, 5);
+    gesture(1.3, 7, open, 0);
+    gesture(.9, 7, {}, 0);
   } else if (goal.name == "look_at") {
     const double angle = -std::remainder(goal.direction_deg.value_or(0.0), 360.0) * kDeg;
     yaw(angle, .75);

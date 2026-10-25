@@ -165,6 +165,37 @@ void testArmGesturesReturnToTheirInitialPose() {
     engine.submit(goal, 0);
     const bool left = std::string(name) == "nod";
     const std::size_t offset = left ? 0 : 7;
+    MotionEngine sync_engine(config);
+    sync_engine.updateFeedback(measured, 0);
+    sync_engine.submit(goal, 0);
+    const double open_duration = std::max(
+        .8, 1.875 * 8 * 3.14159265358979323846 / 180.0 /
+                config.max_velocity[offset + 1]);
+    const double arm_delta_degrees = left ? 28.0 : 25.0;
+    const double gesture_delta_degrees = left ? -14.0 : -16.0;
+    const double head_delta_degrees = left ? 8.0 : -8.0;
+    const double synchronized_duration = std::max(
+        left ? 1.3 : 1.4,
+        1.875 * arm_delta_degrees * 3.14159265358979323846 / 180.0 /
+            config.max_velocity[offset + 3]);
+    const double synchronized_midpoint = open_duration + synchronized_duration / 2.0;
+    for (double now = 0; now < synchronized_midpoint; now += .02) {
+      sync_engine.updateFeedback(measured, now);
+      (void)sync_engine.tick(now);
+    }
+    sync_engine.updateFeedback(measured, synchronized_midpoint);
+    const auto synchronized = *sync_engine.tick(synchronized_midpoint);
+    const double arm_progress =
+        (synchronized.position[offset] - measured[offset + 3]) /
+        (gesture_delta_degrees * 3.14159265358979323846 / 180.0);
+    const double head_progress =
+        (synchronized.position[kHeadPitch] - measured[kHeadPitch + 3]) /
+        (head_delta_degrees * 3.14159265358979323846 / 180.0);
+    check(std::abs(arm_progress - head_progress) < 1e-5 &&
+              arm_progress > .05 && arm_progress < .95,
+          "head and arm progress differs: arm=" + std::to_string(arm_progress) +
+              " head=" + std::to_string(head_progress));
+
     std::array<double, 7> excursion{};
     for (int frame = 0; frame <= 500; ++frame) {
       const double now = frame * .02;
