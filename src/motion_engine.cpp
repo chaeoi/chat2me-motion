@@ -148,7 +148,9 @@ std::vector<Waypoint> MotionEngine::waypoints(const ActionGoal &goal, const Join
     gesture(1.3, 7, open, 0);
     gesture(.9, 7, {}, 0);
   } else if (goal.name == "look_at") {
-    const double angle = -std::remainder(goal.direction_deg.value_or(0.0), 360.0) * kDeg;
+    // The controller writes yaw straight to CAN 20, whose positive angle turns right.
+    // Speaker directions are also clockwise; do not apply the URDF yaw sign here.
+    const double angle = std::remainder(goal.direction_deg.value_or(0.0), 360.0) * kDeg;
     yaw(angle, .75);
     yaw(angle, 1.5);
     yaw(y, .75);

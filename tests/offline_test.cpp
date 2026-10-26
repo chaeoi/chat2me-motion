@@ -143,22 +143,55 @@ void testYawActionsDoNotRecenterOtherAxes() {
     goal.name = name;
     goal.direction_deg = 90;
     engine.submit(goal, 0);
-    double minimum_yaw = measuredJoint(measured, kHeadYaw);
+    double maximum_yaw_change = 0;
     for (int frame = 0; frame <= 500; ++frame) {
       const double now = frame * .02;
       engine.updateFeedback(measured, now);
       auto command = engine.tick(now);
       check(command.has_value(), "yaw action stopped publishing");
-      minimum_yaw = std::min(minimum_yaw, command->position[kHeadYaw]);
+      maximum_yaw_change = std::max(maximum_yaw_change,
+          std::abs(command->position[kHeadYaw] - measuredJoint(measured, kHeadYaw)));
       for (std::size_t joint = 0; joint < kJointCount; ++joint) {
         if (joint == kHeadYaw) continue;
         near(command->position[joint], measuredJoint(measured, joint), "yaw action changed an unrelated joint");
         near(command->velocity[joint], 0, "yaw action commanded pitch/roll or arm velocity");
       }
     }
-    check(minimum_yaw < measuredJoint(measured, kHeadYaw) - .1, "yaw action never turned the head");
+    check(maximum_yaw_change > .1, "yaw action never turned the head");
     near(engine.tick(10)->position[kHeadYaw], measuredJoint(measured, kHeadYaw), "yaw action did not return to initial yaw");
     check(engine.status(10).state == "completed", "yaw action exceeded its timeout");
+  }
+}
+
+void testLookAtSpeakerDirection() {
+  // Speaker bearings: clockwise positive. CAN 20: positive turns right on the robot.
+  for (const auto &[bearing, expected_degrees] : std::vector<std::pair<double, double>>{
+           {0, 0}, {30, 30}, {90, 70}, {270, -70}, {330, -30}, {-30, -30}, {390, 30}}) {
+    MotionConfig config;
+    MotionEngine engine(config);
+    auto measured = feedback();
+    measured[19] = .2;
+    engine.updateFeedback(measured, 0);
+    ActionGoal goal;
+    goal.id = "look-direction";
+    goal.name = "look_at";
+    goal.direction_deg = bearing;
+    engine.submit(goal, 0);
+    int hold_frames = 0;
+    for (int frame = 0; frame <= 500; ++frame) {
+      const double now = frame * .02;
+      engine.updateFeedback(measured, now);
+      const auto command = *engine.tick(now);
+      if (std::abs(command.position[kHeadYaw] - expected_degrees * std::acos(-1.0) / 180) < 1e-8 &&
+          std::abs(command.velocity[kHeadYaw]) < 1e-8)
+        ++hold_frames;
+      for (std::size_t joint = 0; joint < kJointCount; ++joint) {
+        if (joint == kHeadYaw) continue;
+        near(command.position[joint], measuredJoint(measured, joint), "look_at changed another joint");
+      }
+    }
+    check(hold_frames >= 25, "look_at did not hold the expected speaker direction within its limits");
+    near(engine.tick(10)->position[kHeadYaw], measured[19], "look_at did not restore its initial yaw");
   }
 }
 
@@ -383,6 +416,7 @@ int main() {
     testTrajectoryAndPacking();
     testHeadPreservesBothArms();
     testYawActionsDoNotRecenterOtherAxes();
+    testLookAtSpeakerDirection();
     testArmGesturesReturnToTheirInitialPose();
     testFeedbackLossAndPreemption();
     testDeadlineAndValidation();

@@ -37,6 +37,7 @@ jobs:
           version="$(date -u -d "$(git log -1 --format=%cI "$GITHUB_SHA")" +%Y%m%d)"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHAT2ME_MOTION_VERSION="$version"
           cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
           mkdir -p dist
           cp build/chat2me-motion dist/chat2me-motion-linux-${{ matrix.arch }}
       - uses: actions/upload-artifact@v7
