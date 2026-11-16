@@ -1,0 +1,108 @@
+name: 自动发布 chat2me-motion
+'on':
+  push:
+    branches:
+    - main
+  workflow_dispatch: null
+concurrency:
+  group: chat2me-motion-release
+  cancel-in-progress: false
+  queue: max
+permissions:
+  contents: write
+jobs:
+  version:
+    name: 自动编号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.number.outputs.version }}
+      released: ${{ steps.number.outputs.released }}
+      skip: ${{ steps.number.outputs.skip }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+    - name: 计算版本并创建标签
+      id: number
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        test "$GITHUB_REF" = refs/heads/main
+        python3 .github/scripts/version.py
+  build:
+    name: Build Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ros:humble-ros-base-jammy
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+        - arch: amd64
+          runner: ubuntu-22.04
+        - arch: arm64
+          runner: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential cmake ros-humble-ament-cmake
+    - name: Build
+      run: |
+        . /opt/ros/humble/setup.sh
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHAT2ME_MOTION_VERSION="$VERSION"
+        cmake --build build --parallel
+        ctest --test-dir build --output-on-failure
+        mkdir -p dist
+        cp build/chat2me-motion dist/chat2me-motion-linux-${{ matrix.arch }}
+    - uses: actions/upload-artifact@v7
+      with:
+        name: release-${{ matrix.arch }}
+        path: dist/chat2me-motion-linux-${{ matrix.arch }}
+        if-no-files-found: error
+        retention-days: 7
+        overwrite: true
+    needs:
+    - version
+    if: needs.version.outputs.skip != 'true' && needs.version.outputs.released != 'true'
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+  release:
+    name: 发布 GitHub Release
+    needs:
+    - version
+    - build
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.version.outputs.skip != 'true' && (needs.build.result
+      == 'success' || (needs.build.result == 'skipped' && needs.version.outputs.released == 'true')) }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRODUCT_NAME: chat2me-motion
+      RELEASE_ASSETS: chat2me-motion-linux-amd64 chat2me-motion-linux-arm64 SHA256SUMS
+      RELEASE_IMAGES: ''
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+    - name: 检查当前 Release 状态
+      id: state
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 .github/scripts/state.py
+    - name: 下载构建产物
+      if: steps.state.outputs.released != 'true'
+      uses: actions/download-artifact@v7
+      with:
+        pattern: release-*
+        merge-multiple: true
+        path: dist
+    - name: 生成校验和
+      if: steps.state.outputs.released != 'true'
+      run: |
+        set -euo pipefail
+        (cd dist && sha256sum * > SHA256SUMS)
+    - name: 发布或恢复 Release
+      id: publish
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 .github/scripts/publish.py
